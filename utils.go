@@ -1,4 +1,4 @@
-package bip32
+package slip10
 
 import (
 	"bytes"

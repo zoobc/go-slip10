@@ -16,45 +16,45 @@ method never returns an error.
 package main
 
 import (
-  "fmt"
-  "log"
+	"fmt"
+	"log"
 
-  slip10 "github.com/lmars/go-slip10"
+	slip10 "github.com/lmars/go-slip10"
 )
 
 // Example address creation for a fictitious company ComputerVoice Inc. where
 // each department has their own wallet to manage
-func main(){
-  // Generate a seed to determine all keys from.
-  // This should be persisted, backed up, and secured
-  seed, err := slip10.NewSeed()
-  if err != nil {
-    log.Fatalln("Error generating seed:", err)
-  }
+func main() {
+	// Generate a seed to determine all keys from.
+	// This should be persisted, backed up, and secured
+	seed, err := slip10.NewSeed()
+	if err != nil {
+		log.Fatalln("Error generating seed:", err)
+	}
 
-  // Create master private key from seed
-  computerVoiceMasterKey, _ := bip32.NewMasterKey(seed)
+	// Create master private key from seed
+	computerVoiceMasterKey, _ := slip10.NewMasterKeyWithCurve(seed, slip10.CurveBitcoin)
 
-  // Map departments to keys
-  // There is a very small chance a given child index is invalid
-  // If so your real program should handle this by skipping the index
-  departmentKeys := map[string]*bip32.Key{}
-  departmentKeys["Sales"], _ = computerVoiceMasterKey.NewChildKey(0)
-  departmentKeys["Marketing"], _ = computerVoiceMasterKey.NewChildKey(1)
-  departmentKeys["Engineering"], _ = computerVoiceMasterKey.NewChildKey(2)
-  departmentKeys["Customer Support"], _ = computerVoiceMasterKey.NewChildKey(3)
+	// Map departments to keys
+	// There is a very small chance a given child index is invalid
+	// If so your real program should handle this by skipping the index
+	departmentKeys := map[string]*slip10.Key{}
+	departmentKeys["Sales"], _ = computerVoiceMasterKey.NewChildKey(0)
+	departmentKeys["Marketing"], _ = computerVoiceMasterKey.NewChildKey(1)
+	departmentKeys["Engineering"], _ = computerVoiceMasterKey.NewChildKey(2)
+	departmentKeys["Customer Support"], _ = computerVoiceMasterKey.NewChildKey(3)
 
-  // Create public keys for record keeping, auditors, payroll, etc
-  departmentAuditKeys := map[string]*bip32.Key{}
-  departmentAuditKeys["Sales"] = departmentKeys["Sales"].PublicKey()
-  departmentAuditKeys["Marketing"] = departmentKeys["Marketing"].PublicKey()
-  departmentAuditKeys["Engineering"] = departmentKeys["Engineering"].PublicKey()
-  departmentAuditKeys["Customer Support"] = departmentKeys["Customer Support"].PublicKey()
+	// Create public keys for record keeping, auditors, payroll, etc
+	departmentAuditKeys := map[string]*slip10.Key{}
+	departmentAuditKeys["Sales"] = departmentKeys["Sales"].PublicKey()
+	departmentAuditKeys["Marketing"] = departmentKeys["Marketing"].PublicKey()
+	departmentAuditKeys["Engineering"] = departmentKeys["Engineering"].PublicKey()
+	departmentAuditKeys["Customer Support"] = departmentKeys["Customer Support"].PublicKey()
 
-  // Print public keys
-  for department, pubKey := range departmentAuditKeys {
-    fmt.Println(department, pubKey)
-  }
+	// Print public keys
+	for department, pubKey := range departmentAuditKeys {
+		fmt.Println(department, pubKey)
+	}
 }
 ```
 

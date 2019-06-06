@@ -2,11 +2,28 @@ package slip10
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
+
+	btcutil "github.com/FactomProject/btcutilecc"
+)
+
+var (
+	// CurveBitcoin generates keys for the secp256k1 curve (equivalent to BIP32)
+	CurveBitcoin = &curve{
+		Curve:   btcutil.Secp256k1(),
+		hmacKey: []byte("Bitcoin seed"),
+	}
+
+	// CurveP256 generates keys for the NIST P-256 curve
+	CurveP256 = &curve{
+		Curve:   elliptic.P256(),
+		hmacKey: []byte("Nist256p1 seed"),
+	}
 )
 
 const (
@@ -53,12 +70,19 @@ type Key struct {
 	ChainCode   []byte // 32 bytes
 	Depth       byte   // 1 bytes
 	IsPrivate   bool   // unserialized
+
+	curve *curve
 }
 
-// NewMasterKey creates a new master extended key from a seed
+// NewMasterKey creates a new Bitcoin master extended key from a seed
 func NewMasterKey(seed []byte) (*Key, error) {
+	return NewMasterKeyWithCurve(seed, CurveBitcoin)
+}
+
+// NewMasterKey creates a new master extended key from a seed using the given curve
+func NewMasterKeyWithCurve(seed []byte, curve *curve) (*Key, error) {
 	// Generate key and chaincode
-	hmac := hmac.New(sha512.New, []byte("Bitcoin seed"))
+	hmac := hmac.New(sha512.New, curve.hmacKey)
 	_, err := hmac.Write(seed)
 	if err != nil {
 		return nil, err
@@ -70,7 +94,7 @@ func NewMasterKey(seed []byte) (*Key, error) {
 	chainCode := intermediary[32:]
 
 	// Validate key
-	err = validatePrivateKey(keyBytes)
+	err = curve.validatePrivateKey(keyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +108,7 @@ func NewMasterKey(seed []byte) (*Key, error) {
 		ChildNumber: []byte{0x00, 0x00, 0x00, 0x00},
 		FingerPrint: []byte{0x00, 0x00, 0x00, 0x00},
 		IsPrivate:   true,
+		curve:       curve,
 	}
 
 	return key, nil
@@ -107,29 +132,30 @@ func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 		ChainCode:   intermediary[32:],
 		Depth:       key.Depth + 1,
 		IsPrivate:   key.IsPrivate,
+		curve:       key.curve,
 	}
 
 	// Bip32 CKDpriv
 	if key.IsPrivate {
 		childKey.Version = PrivateWalletVersion
-		fingerprint, err := hash160(publicKeyForPrivateKey(key.Key))
+		fingerprint, err := hash160(key.curve.publicKeyForPrivateKey(key.Key))
 		if err != nil {
 			return nil, err
 		}
 		childKey.FingerPrint = fingerprint[:4]
-		childKey.Key = addPrivateKeys(intermediary[:32], key.Key)
+		childKey.Key = key.curve.addPrivateKeys(intermediary[:32], key.Key)
 
 		// Validate key
-		err = validatePrivateKey(childKey.Key)
+		err = key.curve.validatePrivateKey(childKey.Key)
 		if err != nil {
 			return nil, err
 		}
 		// Bip32 CKDpub
 	} else {
-		keyBytes := publicKeyForPrivateKey(intermediary[:32])
+		keyBytes := key.curve.publicKeyForPrivateKey(intermediary[:32])
 
 		// Validate key
-		err := validateChildPublicKey(keyBytes)
+		err := key.curve.validateChildPublicKey(keyBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +166,7 @@ func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 			return nil, err
 		}
 		childKey.FingerPrint = fingerprint[:4]
-		childKey.Key = addPublicKeys(keyBytes, key.Key)
+		childKey.Key = key.curve.addPublicKeys(keyBytes, key.Key)
 	}
 
 	return childKey, nil
@@ -157,7 +183,7 @@ func (key *Key) getIntermediary(childIdx uint32) ([]byte, error) {
 		data = append([]byte{0x0}, key.Key...)
 	} else {
 		if key.IsPrivate {
-			data = publicKeyForPrivateKey(key.Key)
+			data = key.curve.publicKeyForPrivateKey(key.Key)
 		} else {
 			data = key.Key
 		}
@@ -178,7 +204,7 @@ func (key *Key) PublicKey() *Key {
 	keyBytes := key.Key
 
 	if key.IsPrivate {
-		keyBytes = publicKeyForPrivateKey(keyBytes)
+		keyBytes = key.curve.publicKeyForPrivateKey(keyBytes)
 	}
 
 	return &Key{
@@ -189,11 +215,16 @@ func (key *Key) PublicKey() *Key {
 		FingerPrint: key.FingerPrint,
 		ChainCode:   key.ChainCode,
 		IsPrivate:   false,
+		curve:       key.curve,
 	}
 }
 
 // Serialize a Key to a 78 byte byte slice
 func (key *Key) Serialize() ([]byte, error) {
+	if key.curve != CurveBitcoin {
+		return nil, errors.New("serialization only supported for Bitcoin keys")
+	}
+
 	// Private keys should be prepended with a single null byte
 	keyBytes := key.Key
 	if key.IsPrivate {
@@ -244,6 +275,7 @@ func Deserialize(data []byte) (*Key, error) {
 	key.FingerPrint = data[5:9]
 	key.ChildNumber = data[9:13]
 	key.ChainCode = data[13:45]
+	key.curve = CurveBitcoin
 
 	if data[45] == byte(0) {
 		key.IsPrivate = true

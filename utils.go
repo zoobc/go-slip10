@@ -2,6 +2,7 @@ package slip10
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -9,17 +10,11 @@ import (
 	"math/big"
 
 	"github.com/FactomProject/basen"
-	btcutil "github.com/FactomProject/btcutilecc"
 	"golang.org/x/crypto/ripemd160"
 )
 
-var (
-	curve       = btcutil.Secp256k1()
-	curveParams = curve.Params()
-
-	// BitcoinBase58Encoding is the encoding used for bitcoin addresses
-	BitcoinBase58Encoding = basen.NewEncoding("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-)
+// BitcoinBase58Encoding is the encoding used for bitcoin addresses
+var BitcoinBase58Encoding = basen.NewEncoding("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 //
 // Hashes
@@ -100,24 +95,30 @@ func base58Decode(data string) ([]byte, error) {
 }
 
 // Keys
-func publicKeyForPrivateKey(key []byte) []byte {
-	return compressPublicKey(curve.ScalarBaseMult(key))
+type curve struct {
+	elliptic.Curve
+
+	hmacKey []byte
 }
 
-func addPublicKeys(key1 []byte, key2 []byte) []byte {
-	x1, y1 := expandPublicKey(key1)
-	x2, y2 := expandPublicKey(key2)
-	return compressPublicKey(curve.Add(x1, y1, x2, y2))
+func (c *curve) publicKeyForPrivateKey(key []byte) []byte {
+	return c.compressPublicKey(c.ScalarBaseMult(key))
 }
 
-func addPrivateKeys(key1 []byte, key2 []byte) []byte {
+func (c *curve) addPublicKeys(key1 []byte, key2 []byte) []byte {
+	x1, y1 := c.expandPublicKey(key1)
+	x2, y2 := c.expandPublicKey(key2)
+	return c.compressPublicKey(c.Add(x1, y1, x2, y2))
+}
+
+func (c *curve) addPrivateKeys(key1 []byte, key2 []byte) []byte {
 	var key1Int big.Int
 	var key2Int big.Int
 	key1Int.SetBytes(key1)
 	key2Int.SetBytes(key2)
 
 	key1Int.Add(&key1Int, &key2Int)
-	key1Int.Mod(&key1Int, curve.Params().N)
+	key1Int.Mod(&key1Int, c.Params().N)
 
 	b := key1Int.Bytes()
 	if len(b) < 32 {
@@ -127,7 +128,7 @@ func addPrivateKeys(key1 []byte, key2 []byte) []byte {
 	return b
 }
 
-func compressPublicKey(x *big.Int, y *big.Int) []byte {
+func (c *curve) compressPublicKey(x *big.Int, y *big.Int) []byte {
 	var key bytes.Buffer
 
 	// Write header; 0x2 for even y value; 0x3 for odd
@@ -144,7 +145,7 @@ func compressPublicKey(x *big.Int, y *big.Int) []byte {
 }
 
 // As described at https://crypto.stackexchange.com/a/8916
-func expandPublicKey(key []byte) (*big.Int, *big.Int) {
+func (c *curve) expandPublicKey(key []byte) (*big.Int, *big.Int) {
 	Y := big.NewInt(0)
 	X := big.NewInt(0)
 	X.SetBytes(key[1:])
@@ -154,24 +155,24 @@ func expandPublicKey(key []byte) (*big.Int, *big.Int) {
 	// => y^2 = x^3 + b
 	ySquared := big.NewInt(0)
 	ySquared.Exp(X, big.NewInt(3), nil)
-	ySquared.Add(ySquared, curveParams.B)
+	ySquared.Add(ySquared, c.Params().B)
 
-	Y.ModSqrt(ySquared, curveParams.P)
+	Y.ModSqrt(ySquared, c.Params().P)
 
 	Ymod2 := big.NewInt(0)
 	Ymod2.Mod(Y, big.NewInt(2))
 
 	signY := uint64(key[0]) - 2
 	if signY != Ymod2.Uint64() {
-		Y.Sub(curveParams.P, Y)
+		Y.Sub(c.Params().P, Y)
 	}
 
 	return X, Y
 }
 
-func validatePrivateKey(key []byte) error {
+func (c *curve) validatePrivateKey(key []byte) error {
 	if fmt.Sprintf("%x", key) == "0000000000000000000000000000000000000000000000000000000000000000" || //if the key is zero
-		bytes.Compare(key, curveParams.N.Bytes()) >= 0 || //or is outside of the curve
+		bytes.Compare(key, c.Params().N.Bytes()) >= 0 || //or is outside of the curve
 		len(key) != 32 { //or is too short
 		return ErrInvalidPrivateKey
 	}
@@ -179,8 +180,8 @@ func validatePrivateKey(key []byte) error {
 	return nil
 }
 
-func validateChildPublicKey(key []byte) error {
-	x, y := expandPublicKey(key)
+func (c *curve) validateChildPublicKey(key []byte) error {
+	x, y := c.expandPublicKey(key)
 
 	if x.Sign() == 0 || y.Sign() == 0 {
 		return ErrInvalidPublicKey

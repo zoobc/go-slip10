@@ -1,8 +1,6 @@
-# go-bip32
+# go-slip10
 
-[![Build Status](https://api.travis-ci.org/tyler-smith/go-bip32.png)](https://travis-ci.org/tyler-smith/go-bip32)
-
-An implementation of the BIP32 spec for Hierarchical Deterministic Bitcoin addresses as a simple Go library. The semantics of derived keys are up to the user. [BIP43](https://github.com/bitcoin/bips/blob/master/bip-0043.mediawiki) and [BIP44](https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki) are good schemes to implement with this library. An additional library for either or both of those on top of this library should be developed.
+An implementation of the [SLIP-0010 spec](https://github.com/satoshilabs/slips/blob/master/slip-0010.md) for Universal private key derivation from master private key as a simple Go library. The semantics of derived keys are up to the user. [SLIP-0013](https://github.com/satoshilabs/slips/blob/master/slip-0013.md) is a good scheme to implement with this library.
 
 ## Example
 
@@ -18,9 +16,10 @@ method never returns an error.
 package main
 
 import (
-  "github.com/tyler-smith/go-bip32"
   "fmt"
   "log"
+
+  slip10 "github.com/lmars/go-slip10"
 )
 
 // Example address creation for a fictitious company ComputerVoice Inc. where
@@ -28,7 +27,7 @@ import (
 func main(){
   // Generate a seed to determine all keys from.
   // This should be persisted, backed up, and secured
-  seed, err := bip32.NewSeed()
+  seed, err := slip10.NewSeed()
   if err != nil {
     log.Fatalln("Error generating seed:", err)
   }
@@ -60,6 +59,11 @@ func main(){
 ```
 
 ## Thanks
+
+This library is a modified version of Tyler Smith's [go-bip32](https://github.com/tyler-smith/go-bip32) library,
+much thanks goes to Tyler.
+
+From Tyler Smith himself:
 
 The developers at [Factom](https://www.factom.com/) have contributed a lot to this library and have made many great improvements to it. Please check out their project(s) and give them a thanks if you use this library.
 

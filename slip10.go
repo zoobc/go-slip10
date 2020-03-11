@@ -2,12 +2,18 @@ package slip10
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 
 	btcutil "github.com/FactomProject/btcutilecc"
 )
@@ -33,6 +39,8 @@ const (
 
 	// PublicKeyCompressedLength is the byte count of a compressed public key
 	PublicKeyCompressedLength = 33
+
+	seedModifier = "ed25519 seed"
 )
 
 var (
@@ -59,6 +67,9 @@ var (
 
 	// ErrInvalidPublicKey is returned when a derived public key is invalid
 	ErrInvalidPublicKey = errors.New("Invalid public key")
+
+	pathRegex      = regexp.MustCompile(`^m(\/[0-9]+')+$`)
+	ErrInvalidPath = errors.New("Invalid derivation path")
 )
 
 // Key represents a bip32 extended key
@@ -66,17 +77,36 @@ type Key struct {
 	Key         []byte // 33 bytes
 	Version     []byte // 4 bytes
 	ChildNumber []byte // 4 bytes
+	PubKey      []byte //32 bytes
 	FingerPrint []byte // 4 bytes
 	ChainCode   []byte // 32 bytes
 	Depth       byte   // 1 bytes
 	IsPrivate   bool   // unserialized
+	IsEd25519   bool
 
 	curve *curve
 }
 
 // NewMasterKey creates a new Bitcoin master extended key from a seed
 func NewMasterKey(seed []byte) (*Key, error) {
-	return NewMasterKeyWithCurve(seed, CurveBitcoin)
+	hmac := hmac.New(sha512.New, []byte(seedModifier))
+	_, err := hmac.Write(seed)
+	if err != nil {
+		return nil, err
+	}
+	sum := hmac.Sum(nil)
+	key := &Key{
+		Version:     PrivateWalletVersion,
+		ChainCode:   sum[32:],
+		Key:         sum[:32],
+		Depth:       0x0,
+		ChildNumber: []byte{0x00, 0x00, 0x00, 0x00},
+		FingerPrint: []byte{0x00, 0x00, 0x00, 0x00},
+		IsPrivate:   true,
+		IsEd25519:   true,
+		curve:       nil,
+	}
+	return key, nil
 }
 
 // NewMasterKey creates a new master extended key from a seed using the given curve
@@ -117,58 +147,31 @@ func NewMasterKeyWithCurve(seed []byte, curve *curve) (*Key, error) {
 // NewChildKey derives a child key from a given parent as outlined by bip32
 func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 	// Fail early if trying to create hardned child from public key
-	if !key.IsPrivate && childIdx >= FirstHardenedChild {
+	if childIdx < FirstHardenedChild {
 		return nil, ErrHardnedChildPublicKey
 	}
 
-	intermediary, err := key.getIntermediary(childIdx)
+	iBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(iBytes, childIdx)
+	keys := append([]byte{0x0}, key.Key...)
+	fmt.Println("keys = ", keys)
+	data := append(keys, iBytes...)
+	fmt.Println("data = ", data)
+
+	hmac := hmac.New(sha512.New, key.ChainCode)
+	fmt.Println("HMAC = ", hmac)
+	_, err := hmac.Write(data)
 	if err != nil {
 		return nil, err
 	}
-
-	// Create child Key with data common to all both scenarios
+	sum := hmac.Sum(nil)
 	childKey := &Key{
-		ChildNumber: uint32Bytes(childIdx),
-		ChainCode:   intermediary[32:],
+		Key:         sum[:32],
+		ChainCode:   sum[32:],
 		Depth:       key.Depth + 1,
 		IsPrivate:   key.IsPrivate,
-		curve:       key.curve,
+		ChildNumber: uint32Bytes(childIdx),
 	}
-
-	// Bip32 CKDpriv
-	if key.IsPrivate {
-		childKey.Version = PrivateWalletVersion
-		fingerprint, err := hash160(key.curve.publicKeyForPrivateKey(key.Key))
-		if err != nil {
-			return nil, err
-		}
-		childKey.FingerPrint = fingerprint[:4]
-		childKey.Key = key.curve.addPrivateKeys(intermediary[:32], key.Key)
-
-		// Validate key
-		err = key.curve.validatePrivateKey(childKey.Key)
-		if err != nil {
-			return nil, err
-		}
-		// Bip32 CKDpub
-	} else {
-		keyBytes := key.curve.publicKeyForPrivateKey(intermediary[:32])
-
-		// Validate key
-		err := key.curve.validateChildPublicKey(keyBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		childKey.Version = PublicWalletVersion
-		fingerprint, err := hash160(key.Key)
-		if err != nil {
-			return nil, err
-		}
-		childKey.FingerPrint = fingerprint[:4]
-		childKey.Key = key.curve.addPublicKeys(keyBytes, key.Key)
-	}
-
 	return childKey, nil
 }
 
@@ -315,4 +318,86 @@ func NewSeed() ([]byte, error) {
 	s := make([]byte, 256)
 	_, err := rand.Read(s)
 	return s, err
+}
+
+func DeriveForPath(path string, seed []byte) (*Key, error) {
+	if bool, _ := isValidPath(path); bool == false {
+		return nil, ErrInvalidPath
+	}
+
+	key, err := NewMasterKey(seed)
+	if err != nil {
+		return nil, err
+	}
+
+	segments := strings.Split(path, "/")
+	for _, segment := range segments[1:] {
+		i64, err := strconv.ParseUint(strings.TrimRight(segment, "'"), 10, 32)
+		if err != nil {
+			return nil, err
+		}
+
+		// We operate on hardened keys
+		i := uint32(i64) + FirstHardenedChild
+		key, err = key.Derive(i)
+		if err != nil {
+			return nil, err
+		}
+	}
+	key.PubKey, _ = key.FuncPublicKey()
+	return key, nil
+}
+
+func isValidPath(path string) (bool, error) {
+	if !pathRegex.MatchString(path) {
+		return false, nil
+	}
+
+	// Check for overflows
+	segments := strings.Split(path, "/")
+	for _, segment := range segments[1:] {
+		_, err := strconv.ParseUint(strings.TrimRight(segment, "'"), 10, 32)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
+func (key *Key) Derive(i uint32) (*Key, error) {
+	// no public derivation for ed25519
+	if i < FirstHardenedChild {
+		return nil, ErrHardnedChildPublicKey
+	}
+
+	iBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(iBytes, i)
+	keys := append([]byte{0x0}, key.Key...)
+	data := append(keys, iBytes...)
+
+	hmac := hmac.New(sha512.New, key.ChainCode)
+	_, err := hmac.Write(data)
+	if err != nil {
+		return nil, err
+	}
+	sum := hmac.Sum(nil)
+	childKey := &Key{
+		Key:         sum[:32],
+		ChainCode:   sum[32:],
+		Depth:       key.Depth + 1,
+		IsPrivate:   key.IsPrivate,
+		ChildNumber: uint32Bytes(i),
+	}
+	return childKey, nil
+}
+
+// PublicKey returns public key for a derived private key.
+func (key *Key) FuncPublicKey() ([]byte, error) {
+	reader := bytes.NewReader(key.Key)
+	pub, _, err := ed25519.GenerateKey(reader)
+	if err != nil {
+		return nil, err
+	}
+	return pub[:], nil
 }

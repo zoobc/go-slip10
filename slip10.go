@@ -33,7 +33,7 @@ var (
 )
 
 const (
-	// FirstHardenedChild is the index of the firxt "harded" child key as per the
+	// FirstHardenedChild is the index of the first "harded" child key as per the
 	// bip32 spec
 	FirstHardenedChild = uint32(0x80000000)
 
@@ -77,7 +77,7 @@ type Key struct {
 	Key         []byte // 33 bytes
 	Version     []byte // 4 bytes
 	ChildNumber []byte // 4 bytes
-	PubKey      []byte //32 bytes
+	PubKey      []byte // 32 bytes
 	FingerPrint []byte // 4 bytes
 	ChainCode   []byte // 32 bytes
 	Depth       byte   // 1 bytes
@@ -109,7 +109,7 @@ func NewMasterKey(seed []byte) (*Key, error) {
 	return key, nil
 }
 
-// NewMasterKey creates a new master extended key from a seed using the given curve
+// NewMasterKeyWithCurve creates a new master extended key from a seed using the given curve
 func NewMasterKeyWithCurve(seed []byte, curve *curve) (*Key, error) {
 	// Generate key and chaincode
 	hmac := hmac.New(sha512.New, curve.hmacKey)
@@ -392,7 +392,7 @@ func (key *Key) Derive(i uint32) (*Key, error) {
 	return childKey, nil
 }
 
-// PublicKey returns public key for a derived private key.
+// FuncPublicKey returns public key for a derived private key.
 func (key *Key) FuncPublicKey() ([]byte, error) {
 	reader := bytes.NewReader(key.Key)
 	pub, _, err := ed25519.GenerateKey(reader)
